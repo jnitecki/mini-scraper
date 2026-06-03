@@ -1,0 +1,11 @@
+ARG IMAGE_TAG=v1.44.0-jammy
+FROM mcr.microsoft.com/playwright:$IMAGE_TAG
+
+RUN  mkdir /scraper && cd /scraper && npm init -y && npm install playwright
+COPY ./scraper.js /scraper/
+
+WORKDIR /scraper
+
+ENTRYPOINT [ "node" ]
+CMD [ "scraper.js" ]
+
