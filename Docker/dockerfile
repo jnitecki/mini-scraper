@@ -1,7 +1,7 @@
 ARG IMAGE_TAG=v1.44.0-jammy
 FROM mcr.microsoft.com/playwright:$IMAGE_TAG
 
-RUN  mkdir /scraper && cd /scraper && npm init -y && npm install playwright
+RUN  mkdir /scraper && cd /scraper && npm init -y && npm install playwright winston winston-daily-rotate-file
 COPY ./scraper.js /scraper/
 
 WORKDIR /scraper
