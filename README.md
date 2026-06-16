@@ -47,3 +47,6 @@ A custom `scraper.js` can be mounted into the container at the `/scraper/scraper
 
 Include `const { chromium } = require('playwright');` in your custom script to access the Playwright engine.
 
+## Logging
+This container includes Winston and winston-daily-rotate-file for logging purposes.
+
