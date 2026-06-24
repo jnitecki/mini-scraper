@@ -24,6 +24,7 @@ podman run --rm --name mini-scraper \
 - `DEWA_USER` - Your DEWA account email address
 - `DEWA_PASS` - Your DEWA account password  
 - `PERIOD` - The period to retrieve data for (default: 'CURRENT'). Can be 'CURRENT' or a date in yyyy-mm format (e.g., 2023-12)
+- `TIMEOUT` - Total time budget in seconds for the entire scraping operation (default: 60). If provided, must be a number between 10 and 300. Each Playwright step receives only the time remaining from this budget — if the budget is exhausted mid-run, the operation fails with a timeout error.
 - `CLEANUP_DAYS` - Number of days to retain logs, screenshots and page data in logs directory (default: 14). Set to 0 for indefinite retention.
 - `CONSOLE_LOG` - Logging level for console output (default: 'warn'). Set to 'none' to disable console logging
 - `FILE_LOG` - Logging level for file output (default: 'info')

@@ -20,14 +20,12 @@ const path = require('path');
 const USERNAME = process.env.DEWA_USER;
 const PASSWORD = process.env.DEWA_PASS;
 const PERIOD = process.env.PERIOD || 'CURRENT';
+const TIMEOUT = process.env.TIMEOUT ? Number(process.env.TIMEOUT) : 60;
 const CLEANUP_DAYS = process.env.CLEANUP_DAYS || '14';
 const DEWA_LOGIN_URL = "https://www.dewa.gov.ae/en/consumer/my-account/login";
 
-// Validate CLEANUP_DAYS parameter
-if (CLEANUP_DAYS !== '0' && (isNaN(CLEANUP_DAYS) || parseInt(CLEANUP_DAYS) < 0)) {
-  logger.warn(`Invalid CLEANUP_DAYS value: ${CLEANUP_DAYS}. Using default 14 days.`);
-  process.exit(1);
-}
+const cleanupDaysNum = Number(CLEANUP_DAYS);
+const cleanupDaysValid = !isNaN(cleanupDaysNum) && Number.isInteger(cleanupDaysNum) && cleanupDaysNum >= 0;
 
 const consoleTransport = new winston.transports.Console({
   silent: process.env.CONSOLE_LOG === 'none',
@@ -46,7 +44,7 @@ const fileTransport = new winston.transports.DailyRotateFile({
   datePattern: 'YYYY-MM-DD',
   zippedArchive: true,
   maxSize: '20m',
-  maxFiles: CLEANUP_DAYS +'d',
+  ...(cleanupDaysValid && cleanupDaysNum > 0 ? { maxFiles: CLEANUP_DAYS + 'd' } : {}),
   silent: process.env.FILE_LOG === 'none',
   level: process.env.FILE_LOG === 'none' ? 'error' : (process.env.FILE_LOG || 'info'),
   format: format.combine(
@@ -73,6 +71,20 @@ const logger = winston.createLogger({
   ]
 });
 
+if (!cleanupDaysValid) {
+  logger.error(`Error: CLEANUP_DAYS must be a non-negative integer. Value '${process.env.CLEANUP_DAYS}' is invalid. Log file rotation cleanup is disabled.`);
+  process.exit(1);
+}
+
+// Validate TIMEOUT parameter (only when explicitly provided; default is 60)
+if (process.env.TIMEOUT !== undefined) {
+  if (isNaN(TIMEOUT) || TIMEOUT < 10 || TIMEOUT > 300) {
+    logger.error(`Error: TIMEOUT must be a number between 10 and 300 seconds`);
+    logger.error(`Usage: TIMEOUT=60 node dewa_usage.js`);
+    process.exit(1);
+  }
+}
+
 // Check if credentials are provided
 if (!USERNAME || !PASSWORD) {
   logger.error(`Error: DEWA_USER and DEWA_PASS environment variables must be set.`);
@@ -84,7 +96,7 @@ if (!USERNAME || !PASSWORD) {
 const normalizedPeriod = PERIOD.toUpperCase();
 if (normalizedPeriod !== 'CURRENT') {
   // Check if it's a valid date format yyyy-mm
-  const dateRegex = /^202[5-6]-((0[1-9])|(1[0-2]))$/;
+  const dateRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
   if (!dateRegex.test(PERIOD)) {
     logger.error(`Error: PERIOD must be either 'CURRENT' or a date in yyyy-mm format (e.g., 2023-12)`);
     logger.error(`Usage: PERIOD=2023-12 node dewa_usage.js`);
@@ -112,76 +124,50 @@ if (normalizedPeriod !== 'CURRENT') {
   }
 }
 
+function removeOldFiles(dir, prefix, ext, cutoffDate) {
+  let count = 0;
+  fs.readdirSync(dir).forEach(file => {
+    if (file.startsWith(prefix) && file.endsWith(ext)) {
+      const filePath = path.join(dir, file);
+      try {
+        if (new Date(fs.statSync(filePath).mtime) < cutoffDate) {
+          fs.unlinkSync(filePath);
+          logger.debug(`Removed old file: ${file}`);
+          count++;
+        }
+      } catch (error) {
+        logger.warn(`Failed to remove ${file}: ${error.message}`);
+      }
+    }
+  });
+  return count;
+}
+
 async function cleanupOldScreenshotsAndPages() {
   try {
-    const logsDir = './logs';
-    
-    // Check if logs directory exists
+    const logsDir = '/logs';
+
     if (!fs.existsSync(logsDir)) {
       return;
     }
 
-    // Parse the cleanup days - 0 means indefinite retention
     const cleanupDays = parseInt(CLEANUP_DAYS);
     if (isNaN(cleanupDays) || cleanupDays < 0) {
-      logger.warn(`Invalid CLEANUP_DAYS value: ${CLEANUP_DAYS}. Using default 14 days.`);
+      logger.warn(`Invalid CLEANUP_DAYS value: ${CLEANUP_DAYS}. Skipping cleanup.`);
       return;
     }
 
-    // Read all files in the logs directory
-    const files = fs.readdirSync(logsDir);
-    
-    let removedCount = 0;
-    
-    files.forEach(file => {
-      // Only process screenshot_*.png and page_*.html files
-      if (file.startsWith('screenshot_') && file.endsWith('.png')) {
-        const filePath = path.join(logsDir, file);
-        try {
-          // Skip cleanup if cleanupDays is 0 (indefinite retention)
-          if (cleanupDays === 0) {
-            return;
-          }
-          
-          const stats = fs.statSync(filePath);
-          const fileDate = new Date(stats.mtime);
-          const cutoffDate = new Date();
-          cutoffDate.setDate(cutoffDate.getDate() - cleanupDays);
-          
-          // Remove file if it's older than the cutoff date
-          if (fileDate < cutoffDate) {
-            fs.unlinkSync(filePath);
-            logger.debug(`Removed old screenshot: ${file}`);
-            removedCount++;
-          }
-        } catch (error) {
-          logger.warn(`Failed to remove screenshot ${file}: ${error.message}`);
-        }
-      } else if (file.startsWith('page_') && file.endsWith('.html')) {
-        const filePath = path.join(logsDir, file);
-        try {
-          // Skip cleanup if cleanupDays is 0 (indefinite retention)
-          if (cleanupDays === 0) {
-            return;
-          }
-          
-          const stats = fs.statSync(filePath);
-          const fileDate = new Date(stats.mtime);
-          const cutoffDate = new Date();
-          cutoffDate.setDate(cutoffDate.getDate() - cleanupDays);
-          
-          // Remove file if it's older than the cutoff date
-          if (fileDate < cutoffDate) {
-            fs.unlinkSync(filePath);
-            logger.debug(`Removed old page: ${file}`);
-            removedCount++;
-          }
-        } catch (error) {
-          logger.warn(`Failed to remove page ${file}: ${error.message}`);
-        }
-      }
-    });
-    
+    if (cleanupDays === 0) {
+      return;
+    }
+
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - cleanupDays);
+
+    const removedCount =
+      removeOldFiles(logsDir, 'screenshot_', '.png', cutoffDate) +
+      removeOldFiles(logsDir, 'page_', '.html', cutoffDate);
+
     if (removedCount > 0) {
       logger.info(`Successfully cleaned up ${removedCount} old screenshot and page files`);
     }
@@ -191,6 +177,13 @@ async function cleanupOldScreenshotsAndPages() {
 }
 
 async function scrapeDEWA() {
+  const startTime = Date.now();
+  const getRemaining = () => {
+    const remaining = TIMEOUT * 1000 - (Date.now() - startTime);
+    if (remaining <= 0) throw new Error('Operation timed out');
+    return remaining;
+  };
+
   const browser = await chromium.launch({
     headless: true, // Set to false to watch the browser in action (useful for debugging)
   });
@@ -205,18 +198,18 @@ async function scrapeDEWA() {
   try {
     // ─── Step 1: Go to login page ───────────────────────────────────────────
     logger.debug(`Navigating to DEWA login page...`);
-    await page.goto(DEWA_LOGIN_URL, { waitUntil: "networkidle" });
+    await page.goto(DEWA_LOGIN_URL, { waitUntil: "networkidle", timeout: getRemaining() });
 
     // ─── Step 2: Fill login form ─────────────────────────────────────────────
     // NOTE: Inspect the DEWA login page and update these selectors if they change
     logger.debug(`Filling in credentials...`);
-    await page.fill('input[name="Username"]', USERNAME);
-    await page.fill('input[name="Password"]', PASSWORD);
+    await page.fill('input[name="Username"]', USERNAME, { timeout: getRemaining() });
+    await page.fill('input[name="Password"]', PASSWORD, { timeout: getRemaining() });
 
     // Click login button
-    [navigation] = await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 }),
-      page.click('button[type="submit"]')
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'networkidle', timeout: getRemaining() }),
+      page.click('button[type="submit"]', { timeout: getRemaining() })
     ]);
     logger.info(`Logged in. Current URL: ${page.url()}`);
 
@@ -249,6 +242,7 @@ async function scrapeDEWA() {
       throw new Error(`Error: Requested period '${optionValue}' is not available`);
     }
     
+    let period;
     while (true) {
       period = await page.$eval('select:first-of-type', el => ({
         value: el.value,
@@ -257,14 +251,14 @@ async function scrapeDEWA() {
       if (period.value == optionValue)
         break;
       logger.debug(`Selecting option: ${optionValue}`);
-      [navigation] = await Promise.all([
-        page.waitForFunction(() => new Promise(resolve => setTimeout(resolve, 0))),
-        page.selectOption('select:first-of-type', { value: optionValue })
+      await Promise.all([
+        page.waitForFunction(() => new Promise(resolve => setTimeout(resolve, 0)), { timeout: getRemaining() }),
+        page.selectOption('select:first-of-type', { value: optionValue }, { timeout: getRemaining() })
       ]);
     }
-    
-    electricity = await page.$eval('#gauge-component > form + div > div:nth-child(1)', el => ({ value: el.innerText.split(/\r\n|\r|\n/)[0], type: el.innerText.split(/\r\n|\r|\n/)[2]}));
-    water = await page.$eval('#gauge-component > form + div > div:nth-child(2)', el => ({ value: el.innerText.split(/\r\n|\r|\n/)[0], type: el.innerText.split(/\r\n|\r|\n/)[2]}));
+
+    const electricity = await page.$eval('#gauge-component > form + div > div:nth-child(1)', el => ({ value: el.innerText.split(/\r\n|\r|\n/)[0], type: el.innerText.split(/\r\n|\r|\n/)[2]}));
+    const water = await page.$eval('#gauge-component > form + div > div:nth-child(2)', el => ({ value: el.innerText.split(/\r\n|\r|\n/)[0], type: el.innerText.split(/\r\n|\r|\n/)[2]}));
 
     logger.debug(period);
     logger.debug(electricity);
@@ -290,7 +284,6 @@ async function scrapeDEWA() {
     
     // Save HTML content for additional debugging
     const htmlContent = await page.content();
-    const fs = require("fs");
     fs.writeFileSync(`/logs/page_${timestamp}.html`, htmlContent);
     logger.warn(`HTML content saved to page_${timestamp}.html`);
 
@@ -303,7 +296,7 @@ async function scrapeDEWA() {
 
 (async () => {
   try {
-    results = await scrapeDEWA();
+    const results = await scrapeDEWA();
     // Cleanup old screenshots and pages only on successful completion
     cleanupOldScreenshotsAndPages();
     console.log(results);
