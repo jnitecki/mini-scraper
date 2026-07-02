@@ -1,4 +1,4 @@
-ARG IMAGE_TAG=v1.44.0-jammy
+ARG IMAGE_TAG=v1.61.0-noble
 FROM mcr.microsoft.com/playwright:$IMAGE_TAG
 
 RUN  mkdir /scraper && cd /scraper && npm init -y && npm install playwright winston winston-daily-rotate-file
