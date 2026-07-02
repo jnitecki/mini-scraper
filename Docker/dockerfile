@@ -6,6 +6,7 @@ COPY ./scraper.js /scraper/
 
 WORKDIR /scraper
 
-ENTRYPOINT [ "node" ]
-CMD [ "scraper.js" ]
+COPY ./entrypoint.sh /entrypoint.sh
+ENTRYPOINT [ "/entrypoint.sh" ]
+CMD [ "node", "scraper.js" ]
 
