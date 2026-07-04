@@ -25,9 +25,12 @@ podman run --rm --name mini-scraper \
 - `DEWA_PASS` - Your DEWA account password  
 - `PERIOD` - The period to retrieve data for (default: 'CURRENT'). Can be 'CURRENT' or a date in yyyy-mm format (e.g., 2023-12)
 - `TIMEOUT` - Total time budget in seconds for the entire scraping operation (default: 60). If provided, must be a number between 10 and 300. Each Playwright step receives only the time remaining from this budget — if the budget is exhausted mid-run, the operation fails with a timeout error.
-- `CLEANUP_DAYS` - Number of days to retain logs, screenshots and page data in logs directory (default: 14). Set to 0 for indefinite retention.
 - `CONSOLE_LOG` - Logging level for console output (default: 'warn'). Set to 'none' to disable console logging
-- `FILE_LOG` - Logging level for file output (default: 'info')
+- `FILE_LOG` - Logging level for file output, written to `/logs/miniscraper.log` (default: 'info'). Set to 'none' to disable file logging
+- `FAILURE_DUMP_PREFIX` - Optional path/prefix for the screenshot and page HTML dump written on failure. If the value starts with `/`, it's used as-is; otherwise `/logs/` is prepended. The resulting files are `<prefix>screenshot.png` and `<prefix>page.html`, overwritten on each failing run. Default (unset): `/logs/screenshot.png` and `/logs/page.html`
+- `NETWORK_HAR_PATH` - Optional full path to a HAR file capturing all network activity for the run (e.g. `/logs/network.har`). Unset disables HAR capture; when set, the file is overwritten on every run
+- `TRACE_CONFIG` - Optional Playwright trace capture. Value is the trace zip path, optionally followed by space-separated `flag:true|false` tokens for `screenshots`, `snapshots`, `sources` (e.g. `/logs/trace.zip screenshots:true sources:true`). Unset disables tracing
+- `PW_DEBUG_SCOPES` - Optional comma-separated Playwright debug namespaces (e.g. `pw:api,pw:browser`) enabling Playwright's internal debug logging to stderr. Unset disables it
 
 ## Security Note
 
@@ -61,9 +64,10 @@ When an error occurs, the scraper:
 
 The scraper generates logs and diagnostic files in the mounted `/logs` directory:
 
-- **Processing logs**: Stored as daily-rotated log files (e.g., `miniscraper-2026-06-16.log`)
-- **Screenshots**: Saved as PNG files when errors occur (e.g., `screenshot_260616123414.png`)
-- **HTML content**: Saved as HTML files when errors occur (e.g., `page_260616123414.html`)
+- **Processing logs**: Stored in a single fixed file, `/logs/miniscraper.log`. There is no built-in rotation — rotate/retain the mounted volume externally if needed.
+- **Screenshots**: Saved as a PNG file when errors occur (default `/logs/screenshot.png`, or `<FAILURE_DUMP_PREFIX>screenshot.png` if set), overwritten on each failing run.
+- **HTML content**: Saved as an HTML file when errors occur (default `/logs/page.html`, or `<FAILURE_DUMP_PREFIX>page.html` if set), overwritten on each failing run.
+- **Network HAR / Playwright trace**: Optionally captured via `NETWORK_HAR_PATH` / `TRACE_CONFIG` (see Environment Variables above).
 
 These files are automatically generated and stored in the logs directory that is mounted to `/logs` inside the container.
 
@@ -72,4 +76,4 @@ These files are automatically generated and stored in the logs directory that is
 If the scraper fails:
 1. Check that your credentials are correct
 2. Verify the selectors in the code match the current website structure
-3. The program will take screenshots on failure (`screenshoot_XXX.png`)
+3. The program will take a screenshot and save the page HTML on failure (`/logs/screenshot.png` and `/logs/page.html` by default, or `<FAILURE_DUMP_PREFIX>screenshot.png` / `<FAILURE_DUMP_PREFIX>page.html` if set)

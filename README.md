@@ -18,6 +18,13 @@ A very simple web scraper that loads pages in a browser, executes all scripts, a
         - `text` - The text of the selected element.
         - `html` - The HTML of the selected element.
         - `attrs` - An object containing all attributes of the selected element.
+- **CONSOLE_LOG** - Logging level for console output (default: 'warn'). Set to 'none' to disable console logging.
+- **FILE_LOG** - Logging level for file output, written to `/logs/miniscraper.log` (default: 'none', i.e. file logging is disabled unless explicitly set). If set but `/logs` is not mounted, a console warning is issued and file logging is skipped.
+- **FAILURE_DUMP_PREFIX** - Optional path/prefix used to name the screenshot and page HTML dump written on failure. If the value starts with `/`, it's used as-is; otherwise `/logs/` is prepended. The resulting files are `<prefix>screenshot.png` and `<prefix>page.html`, overwritten on each failing run.
+*Default (unset): `/logs/screenshot.png` and `/logs/page.html`*.
+- **NETWORK_HAR_PATH** - Optional full path to a HAR file capturing all network activity for the run (e.g. `/logs/network.har`). Unset disables HAR capture. When set, the file is overwritten on every run.
+- **TRACE_CONFIG** - Optional Playwright trace capture. Value is the trace zip path, optionally followed by space-separated `flag:true|false` tokens for `screenshots`, `snapshots`, `sources` (e.g. `/logs/trace.zip screenshots:true sources:true`). Unset disables tracing.
+- **PW_DEBUG_SCOPES** - Optional comma-separated Playwright debug namespaces (e.g. `pw:api,pw:browser`) enabling Playwright's internal debug logging to stderr. Unset disables it.
 
 ## Output
 Output data in JSON format, with the content defined by **OUTPUT_FORMAT**, is returned via the standard output stream and can be captured and consumed by the calling application.
@@ -48,5 +55,5 @@ A custom `scraper.js` can be mounted into the container at the `/scraper/scraper
 Include `const { chromium } = require('playwright');` in your custom script to access the Playwright engine.
 
 ## Logging
-This container includes Winston and winston-daily-rotate-file for logging purposes.
+This container includes Winston for logging purposes, writing to a fixed file `/logs/miniscraper.log` (see **CONSOLE_LOG** / **FILE_LOG** above). There is no built-in log rotation — rotate/retain the mounted `/logs` volume externally if needed.
 
