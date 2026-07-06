@@ -23,7 +23,7 @@ podman run --rm --name mini-scraper \
 
 - `DEWA_USER` - Your DEWA account email address
 - `DEWA_PASS` - Your DEWA account password  
-- `PERIOD` - The period to retrieve data for (default: 'CURRENT'). Can be 'CURRENT' or a date in yyyy-mm format (e.g., 2023-12)
+- `PERIOD` - The period to retrieve data for (default: 'CURRENT'). Can be 'CURRENT' or a date in yyyy-mm format (e.g., 2023-12). For 'CURRENT', the scraper identifies the right dropdown option on the usage page by checking, in order: an option with value `UnbilledConsumption`, then an option whose label contains "till yesterday" (case-insensitive), then the first option in the list if its value represents the current or next calendar month. If none of these match, the scraper fails with an error rather than guessing
 - `TIMEOUT` - Total time budget in seconds for the entire scraping operation (default: 60). If provided, must be a number between 10 and 300. Each Playwright step receives only the time remaining from this budget — if the budget is exhausted mid-run, the operation fails with a timeout error.
 - `CONSOLE_LOG` - Logging level for console output (default: 'none', i.e. console logging is disabled unless explicitly set)
 - `FILE_LOG` - Logging level for file output, written to `/logs/miniscraper.log` (default: 'warn'). Set to 'none' to disable file logging
@@ -77,3 +77,5 @@ If the scraper fails:
 1. Check that your credentials are correct
 2. Verify the selectors in the code match the current website structure
 3. The program will take a screenshot and save the page HTML on failure (`/logs/screenshot.png` and `/logs/page.html` by default, or `<FAILURE_DUMP_PREFIX>screenshot.png` / `<FAILURE_DUMP_PREFIX>page.html` if set)
+4. If you see `Error: Unable to determine the current period from available options`, DEWA has likely changed the period dropdown's option values or labels again. Enable `CONSOLE_LOG=debug` or `FILE_LOG=debug` and re-run with `PERIOD=CURRENT` to see the actual `Available periods` list logged, then update the matching logic in `dewa_usage.js` accordingly
+5. If you see `Error: Requested period '<value>' is not available`, the period dropdown's value format may have changed; check the logged `Available periods` list to confirm the expected format (currently `mmyyyy`, e.g. `072025` for July 2025)

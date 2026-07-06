@@ -36,9 +36,10 @@ const consoleTransport = new winston.transports.Console({
   format: format.combine(
     format.colorize(),
     format.timestamp({ format: 'HH:mm:ss' }),
-    format.printf(({ timestamp, level, message }) =>
-      `${timestamp} - ${level}: ${message}`
-    )
+    format.printf(({ timestamp, level, message }) => {
+      const output = typeof message === 'string' ? message : JSON.stringify(message);
+      return `${timestamp} - ${level}: ${output}`;
+    })
   )
 });
 
@@ -226,18 +227,6 @@ async function scrapeDEWA() {
     logger.info(`Logged in. Current URL: ${page.url()}`);
 
     // ─── Step 3: Wait for data to load ──────────────────────────────────────
-    // Select requested period of usage
-    let optionValue;
-    if (normalizedPeriod === 'CURRENT') {
-      optionValue = "UnbilledConsumption";
-    } else {
-      // Convert date format yyyy-mm to the expected format (e.g., 2023-12 becomes 202312)
-      const [year, month] = PERIOD.split('-').map(Number);
-      optionValue = `${month}${year}`; // Format as myyyy (no leading zero for month)
-    }
-
-    logger.debug(`Selecting period: ${optionValue}`);
-
     // Get all available options for debugging
     const allOptions = await page.evaluate(() => {
       const select = document.querySelector('select:first-of-type');
@@ -247,7 +236,48 @@ async function scrapeDEWA() {
       }));
     });
 
-    logger.debug(`Available periods: ${allOptions}`);
+    logger.debug(`Available periods: ${JSON.stringify(allOptions)}`);
+
+    // Select requested period of usage
+    let optionValue;
+    if (normalizedPeriod === 'CURRENT') {
+      // The current/unbilled period isn't always the same option, so try a few
+      // known shapes in order of preference before giving up.
+      let match = allOptions.find(option => option.value === 'UnbilledConsumption');
+
+      if (!match) {
+        match = allOptions.find(option => option.text.toLowerCase().includes('till yesterday'));
+      }
+
+      if (!match) {
+        const first = allOptions[0];
+        if (first && /^\d{6}$/.test(first.value)) {
+          const month = Number(first.value.slice(0, 2));
+          const year = Number(first.value.slice(2));
+          const now = new Date();
+          const currentYear = now.getFullYear();
+          const currentMonth = now.getMonth() + 1;
+          const nextMonth = currentMonth === 12 ? 1 : currentMonth + 1;
+          const nextMonthYear = currentMonth === 12 ? currentYear + 1 : currentYear;
+          const isCurrentMonth = year === currentYear && month === currentMonth;
+          const isNextMonth = year === nextMonthYear && month === nextMonth;
+          if (isCurrentMonth || isNextMonth) {
+            match = first;
+          }
+        }
+      }
+
+      if (!match) {
+        throw new Error(`Error: Unable to determine the current period from available options`);
+      }
+      optionValue = match.value;
+    } else {
+      // Convert date format yyyy-mm to the expected format (e.g., 2023-12 becomes 122023)
+      const [year, month] = PERIOD.split('-').map(Number);
+      optionValue = `${String(month).padStart(2, '0')}${year}`; // Format as mmyyyy (zero-padded month)
+    }
+
+    logger.debug(`Selecting period: ${optionValue}`);
 
     // Validate that the requested option is available
     if (!allOptions.some(option => option.value === optionValue)) {
@@ -319,7 +349,7 @@ async function scrapeDEWA() {
 (async () => {
   try {
     const results = await scrapeDEWA();
-    console.log(results);
+    console.log(JSON.stringify(results));
   } catch (error) {
     console.error({ error: error.message });
     process.exit(1);
