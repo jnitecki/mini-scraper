@@ -17,8 +17,8 @@ const outputFormat = (process.env.OUTPUT_FORMAT || 'TEXT').toUpperCase();
 const validFormats = new Set(['TEXT', 'HTML', 'ALL']);
 
 const LOG_FILE_PATH = '/logs/miniscraper.log';
-const consoleLevel = process.env.CONSOLE_LOG || 'warn';
-const fileLevel = process.env.FILE_LOG || 'none';
+const consoleLevel = process.env.CONSOLE_LOG || 'none';
+const fileLevel = process.env.FILE_LOG || 'warn';
 
 const consoleTransport = new winston.transports.Console({
   silent: consoleLevel === 'none',

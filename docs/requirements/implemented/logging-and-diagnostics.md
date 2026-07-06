@@ -16,10 +16,9 @@ Applies identically to both `Docker/Files/scraper.js` (default container script)
   rotate, rename, or delete this file.
 - Existing `CONSOLE_LOG` / `FILE_LOG` env vars are kept (level name, or `'none'` to
   disable) and are added to `scraper.js`, which does not use winston today.
-  - `dewa_usage.js` defaults: `CONSOLE_LOG=warn`, `FILE_LOG=info` (unchanged from today).
-  - `scraper.js` defaults: `CONSOLE_LOG=warn`, `FILE_LOG=none` (opt-in file logging, so
-    the script keeps working with no `/logs` volume mounted, matching its current
-    zero-config behavior).
+  - Both scripts default to `CONSOLE_LOG=none`, `FILE_LOG=warn` — the script keeps
+    working with no `/logs` volume mounted (file logging degrades to a console warning
+    in that case, per the rule below), matching the project's zero-config behavior.
 - If file logging is enabled (`FILE_LOG` not `none`) but `/logs` does not exist, the
   script logs a console warning and continues without file logging rather than failing.
 - `CLEANUP_DAYS` and the associated `removeOldFiles()` / `cleanupOldScreenshotsAndPages()`

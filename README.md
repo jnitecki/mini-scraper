@@ -18,8 +18,8 @@ A very simple web scraper that loads pages in a browser, executes all scripts, a
         - `text` - The text of the selected element.
         - `html` - The HTML of the selected element.
         - `attrs` - An object containing all attributes of the selected element.
-- **CONSOLE_LOG** - Logging level for console output (default: 'warn'). Set to 'none' to disable console logging.
-- **FILE_LOG** - Logging level for file output, written to `/logs/miniscraper.log` (default: 'none', i.e. file logging is disabled unless explicitly set). If set but `/logs` is not mounted, a console warning is issued and file logging is skipped.
+- **CONSOLE_LOG** - Logging level for console output (default: 'none', i.e. console logging is disabled unless explicitly set).
+- **FILE_LOG** - Logging level for file output, written to `/logs/miniscraper.log` (default: 'warn'). Set to 'none' to disable file logging. If set but `/logs` is not mounted, a console warning is issued and file logging is skipped.
 - **FAILURE_DUMP_PREFIX** - Optional path/prefix used to name the screenshot and page HTML dump written on failure. If the value starts with `/`, it's used as-is; otherwise `/logs/` is prepended. The resulting files are `<prefix>screenshot.png` and `<prefix>page.html`, overwritten on each failing run.
 *Default (unset): `/logs/screenshot.png` and `/logs/page.html`*.
 - **NETWORK_HAR_PATH** - Optional full path to a HAR file capturing all network activity for the run (e.g. `/logs/network.har`). Unset disables HAR capture. When set, the file is overwritten on every run.

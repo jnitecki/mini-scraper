@@ -14,7 +14,7 @@ podman run --rm --name mini-scraper \
   -e DEWA_USER='<username for DEWA>' \
   -e DEWA_PASS='<password for DEWA>' \
   -e CONSOLE_LOG=none \
-  -e FILE_LOG=info \
+  -e FILE_LOG=warn \
   docker.io/jnitecki/mini-scraper:latest \
   2>&1
 ```
@@ -25,8 +25,8 @@ podman run --rm --name mini-scraper \
 - `DEWA_PASS` - Your DEWA account password  
 - `PERIOD` - The period to retrieve data for (default: 'CURRENT'). Can be 'CURRENT' or a date in yyyy-mm format (e.g., 2023-12)
 - `TIMEOUT` - Total time budget in seconds for the entire scraping operation (default: 60). If provided, must be a number between 10 and 300. Each Playwright step receives only the time remaining from this budget — if the budget is exhausted mid-run, the operation fails with a timeout error.
-- `CONSOLE_LOG` - Logging level for console output (default: 'warn'). Set to 'none' to disable console logging
-- `FILE_LOG` - Logging level for file output, written to `/logs/miniscraper.log` (default: 'info'). Set to 'none' to disable file logging
+- `CONSOLE_LOG` - Logging level for console output (default: 'none', i.e. console logging is disabled unless explicitly set)
+- `FILE_LOG` - Logging level for file output, written to `/logs/miniscraper.log` (default: 'warn'). Set to 'none' to disable file logging
 - `FAILURE_DUMP_PREFIX` - Optional path/prefix for the screenshot and page HTML dump written on failure. If the value starts with `/`, it's used as-is; otherwise `/logs/` is prepended. The resulting files are `<prefix>screenshot.png` and `<prefix>page.html`, overwritten on each failing run. Default (unset): `/logs/screenshot.png` and `/logs/page.html`
 - `NETWORK_HAR_PATH` - Optional full path to a HAR file capturing all network activity for the run (e.g. `/logs/network.har`). Unset disables HAR capture; when set, the file is overwritten on every run
 - `TRACE_CONFIG` - Optional Playwright trace capture. Value is the trace zip path, optionally followed by space-separated `flag:true|false` tokens for `screenshots`, `snapshots`, `sources` (e.g. `/logs/trace.zip screenshots:true sources:true`). Unset disables tracing
