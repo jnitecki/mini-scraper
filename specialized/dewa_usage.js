@@ -168,6 +168,22 @@ if (traceConfig) {
   requireParentDir(traceConfig.path, 'TRACE_CONFIG path');
 }
 
+function parsePeriodValue(value) {
+  const match = /^(\d{1,2})(\d{4})$/.exec(value);
+  if (!match) return null;
+  return { month: Number(match[1]), year: Number(match[2]) };
+}
+
+// DEWA billing periods run 22nd-to-21st; Asia/Dubai has no DST (fixed UTC+4).
+function billingPeriodStart(year, month, monthOffset) {
+  let m = month + monthOffset;
+  let y = year;
+  while (m < 1) { m += 12; y -= 1; }
+  while (m > 12) { m -= 12; y += 1; }
+  const mm = String(m).padStart(2, '0');
+  return `${y}-${mm}-22T00:00:00+04:00`;
+}
+
 const failureDumpPrefixEnv = process.env.FAILURE_DUMP_PREFIX;
 const failureDumpPrefix = failureDumpPrefixEnv
   ? (failureDumpPrefixEnv.startsWith('/') ? failureDumpPrefixEnv : '/logs/' + failureDumpPrefixEnv)
@@ -188,17 +204,35 @@ async function scrapeDEWA() {
 
   const browser = await chromium.launch({
     headless: true, // Set to false to watch the browser in action (useful for debugging)
+    args: ["--disable-blink-features=AutomationControlled"],
   });
 
   const contextOptions = {
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+    locale: "en-AE",
+    timezoneId: "Asia/Dubai",
+    viewport: { width: 1366, height: 768 },
   };
   if (networkHarPath) {
     contextOptions.recordHar = { path: networkHarPath };
   }
 
   const context = await browser.newContext(contextOptions);
+
+  // Patch the automation tells that bot-mitigation services (e.g. Incapsula)
+  // check for before the DEWA login form is allowed to render.
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, "languages", { get: () => ["en-AE", "en"] });
+    window.chrome = { runtime: {} };
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) =>
+      parameters.name === "notifications"
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+  });
 
   let tracingStarted = false;
   if (traceConfig) {
@@ -216,8 +250,8 @@ async function scrapeDEWA() {
     // ─── Step 2: Fill login form ─────────────────────────────────────────────
     // NOTE: Inspect the DEWA login page and update these selectors if they change
     logger.debug(`Filling in credentials...`);
-    await page.fill('input[name="Username"]', USERNAME, { timeout: getRemaining() });
-    await page.fill('input[name="Password"]', PASSWORD, { timeout: getRemaining() });
+    await page.locator('input[name="Username"]').pressSequentially(USERNAME, { delay: 60, timeout: getRemaining() });
+    await page.locator('input[name="Password"]').pressSequentially(PASSWORD, { delay: 60, timeout: getRemaining() });
 
     // Click login button
     await Promise.all([
@@ -310,8 +344,24 @@ async function scrapeDEWA() {
       throw new Error("Error: Unknown format of the page. Usage data not found.");
     }
 
+    let periodStart;
+    if (period.value === 'UnbilledConsumption') {
+      const idx = allOptions.findIndex(option => option.value === 'UnbilledConsumption');
+      const parsed = idx !== -1 && allOptions[idx + 1] ? parsePeriodValue(allOptions[idx + 1].value) : null;
+      if (!parsed) {
+        throw new Error(`Error: Unable to determine billing period for UnbilledConsumption`);
+      }
+      periodStart = billingPeriodStart(parsed.year, parsed.month, 0);
+    } else {
+      const parsed = parsePeriodValue(period.value);
+      if (!parsed) {
+        throw new Error(`Error: Unable to parse period value '${period.value}'`);
+      }
+      periodStart = billingPeriodStart(parsed.year, parsed.month, -1);
+    }
+
     logger.info(`Completed successfully: ${period.text} - Electricity ${electricity.value} kWh - Water ${water.value} m3`);
-    return { period: period.text, electricity: electricity.value, water: water.value };
+    return { period: periodStart, electricity: electricity.value, water: water.value };
   } catch (err) {
     logger.error(`Scraping failed: ${err.message}`);
 
