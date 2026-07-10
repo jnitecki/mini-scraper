@@ -245,7 +245,7 @@ async function scrapeDEWA() {
   try {
     // ─── Step 1: Go to login page ───────────────────────────────────────────
     logger.debug(`Navigating to DEWA login page...`);
-    await page.goto(DEWA_LOGIN_URL, { waitUntil: "networkidle", timeout: getRemaining() });
+    await page.goto(DEWA_LOGIN_URL, { waitUntil: "load", timeout: getRemaining() });
 
     // ─── Step 2: Fill login form ─────────────────────────────────────────────
     // NOTE: Inspect the DEWA login page and update these selectors if they change
@@ -255,7 +255,7 @@ async function scrapeDEWA() {
 
     // Click login button
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle', timeout: getRemaining() }),
+      page.waitForNavigation({ waitUntil: 'load', timeout: getRemaining() }),
       page.click('button[type="submit"]', { timeout: getRemaining() })
     ]);
     logger.info(`Logged in. Current URL: ${page.url()}`);
@@ -333,8 +333,12 @@ async function scrapeDEWA() {
       ]);
     }
 
-    const electricity = await page.$eval('#gauge-component > form + div > div:nth-child(1)', el => ({ value: el.innerText.split(/\r\n|\r|\n/)[0], type: el.innerText.split(/\r\n|\r|\n/)[2]}));
-    const water = await page.$eval('#gauge-component > form + div > div:nth-child(2)', el => ({ value: el.innerText.split(/\r\n|\r|\n/)[0], type: el.innerText.split(/\r\n|\r|\n/)[2]}));
+    // Use locators (not page.$eval) so we wait for the panel to (re)render
+    // after selecting the period, instead of reading it the instant it's queried.
+    const electricity = await page.locator('#gauge-component > form + div > div:nth-child(1)')
+      .evaluate(el => ({ value: el.innerText.split(/\r\n|\r|\n/)[0], type: el.innerText.split(/\r\n|\r|\n/)[2]}), null, { timeout: getRemaining() });
+    const water = await page.locator('#gauge-component > form + div > div:nth-child(2)')
+      .evaluate(el => ({ value: el.innerText.split(/\r\n|\r|\n/)[0], type: el.innerText.split(/\r\n|\r|\n/)[2]}), null, { timeout: getRemaining() });
 
     logger.debug(period);
     logger.debug(electricity);
