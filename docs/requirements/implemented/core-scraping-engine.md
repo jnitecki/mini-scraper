@@ -8,8 +8,8 @@ The base container script, `Docker/Files/scraper.js` (the image's default `CMD`)
 mechanism by which it can be replaced with a custom script. Failure diagnostics (screenshot/
 page dump), HAR capture, tracing, and log level configuration are covered separately in
 `requirements/logging-and-diagnostics.md` and are not repeated here. Specialized scripts
-(e.g. `specialized/dewa_usage.js`) are out of scope — they replace this file entirely and
-have their own requirements/documentation.
+(e.g. `specialized/dewa_daily.js`, `specialized/dewa_incremental.js`) are out of scope —
+they replace this file entirely and have their own requirements/documentation.
 
 ## 1. Environment-driven page load & extraction
 - `TARGET_URL` — required. Missing value is a validation error (non-zero exit).
@@ -65,7 +65,8 @@ have their own requirements/documentation.
 - The image's `CMD` runs `node scraper.js` from `/scraper`. Mounting a replacement file over
   `/scraper/scraper.js` (e.g. `-v $(PWD)/custom_scraper.js:/scraper/scraper.js`) fully
   replaces the default script — this is how specialized scripts (e.g.
-  `specialized/dewa_usage.js`) run inside the same image without a custom build.
+  `specialized/dewa_daily.js`, `specialized/dewa_incremental.js`) run inside the same
+  image without a custom build.
 - The image only guarantees the `playwright` and `winston` npm packages are installed and
   available to a mounted script; a custom script must `require('playwright')` itself and
   cannot assume any other dependency is present.

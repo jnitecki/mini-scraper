@@ -20,9 +20,11 @@ ci/
   docker-publish.yml   # Manual GH Actions workflow: build + push to Docker Hub
 build.sh               # Legacy single-purpose podman build+push script (superseded by ci/)
 specialized/
-  dewa_usage.js         # Example specialized script, meant to be mounted over scraper.js
-  dewa_usage.md          # User-facing docs for the DEWA script
-  DEWA.sh                 # Local dev-only run script (gitignored, holds live credentials)
+  dewa_daily.js          # Specialized script: per-day consumption, mounted over scraper.js
+  dewa_daily.md           # User-facing docs for dewa_daily.js
+  dewa_incremental.js    # Specialized script: billing-period totals, mounted over scraper.js
+  dewa_incremental.md     # User-facing docs for dewa_incremental.js
+  *.sh                     # Local dev-only run scripts (gitignored, hold live credentials)
 docs/
   requirements/implemented/  # Behavior specifications (what the system must do)
   IMPLEMENTATION.md          # This file (how the system does it)
@@ -73,12 +75,13 @@ Single-file script, top-to-bottom procedural flow, no external project modules:
    (`fs.existsSync`) at process start. This existence check happens once, synchronously,
    before the logger is created — there's no retry if `/logs` appears later.
    This entire logger-construction block (transports, formats, the conditional
-   `/logs`-exists check) is duplicated verbatim in `specialized/dewa_usage.js` — the two
-   scripts don't share a module; each defines its own copy.
+   `/logs`-exists check) is duplicated verbatim in `specialized/dewa_daily.js` and
+   `specialized/dewa_incremental.js` — none of the three scripts share a module; each
+   defines its own copy.
 4. **Path validation helpers** — `requireParentDir()` is a small shared-shape function
-   (also duplicated in `dewa_usage.js`) that checks a target path's parent directory
-   exists via `fs.existsSync(path.dirname(...))`, used for `NETWORK_HAR_PATH`,
-   `TRACE_CONFIG`'s path, and `FAILURE_DUMP_PREFIX`-derived paths.
+   (also duplicated in `dewa_daily.js` and `dewa_incremental.js`) that checks a target
+   path's parent directory exists via `fs.existsSync(path.dirname(...))`, used for
+   `NETWORK_HAR_PATH`, `TRACE_CONFIG`'s path, and `FAILURE_DUMP_PREFIX`-derived paths.
 5. **`parseTraceConfig()`** — manual whitespace-tokenizing parser: first token is the
    trace zip path, remaining tokens are `flag:true|false` pairs matched against a fixed
    `{screenshots, snapshots, sources}` options object; unknown flags or malformed
@@ -123,38 +126,73 @@ Single-file script, top-to-bottom procedural flow, no external project modules:
      trace; both `context.close()` and `browser.close()` are `.catch(() => {})`-guarded so
      a teardown error can't overwrite `process.exitCode` or throw an unhandled rejection.
 
-## Specialized script pattern (`specialized/dewa_usage.js`)
-Demonstrates the "mount over `/scraper/scraper.js`" extension point described in
-`docs/requirements/implemented/core-scraping-engine.md` §6:
-- Re-implements (copy-pasted, not imported) the same winston/logger bootstrap,
+## Specialized script pattern (`specialized/dewa_daily.js`, `specialized/dewa_incremental.js`)
+Both demonstrate the "mount over `/scraper/scraper.js`" extension point described in
+`docs/requirements/implemented/core-scraping-engine.md` §6, and share the same shape:
+- Each re-implements (copy-pasted, not imported) the same winston/logger bootstrap,
   `requireParentDir`, `parseTraceConfig`, `NETWORK_HAR_PATH`/`TRACE_CONFIG`/
   `FAILURE_DUMP_PREFIX` handling, and failure-diagnostics (`catch`/`finally`) shape as
   `scraper.js` — the shared behavior described in
-  `docs/requirements/implemented/logging-and-diagnostics.md` exists as parallel code, not
-  a shared library.
+  `docs/requirements/implemented/logging-and-diagnostics.md` exists as parallel code
+  across all three scripts, not a shared library.
 - Adds its own domain logic on top: a `getRemaining()` time-budget helper computed from a
   single `startTime`, passed as the `timeout` option to every individual Playwright call
-  (`goto`, `fill`, `click`, `waitForNavigation`, `selectOption`, ...) so the *whole*
+  (`goto`, `fill`, `click`, `waitForNavigation`, locator calls, ...) so the *whole*
   scrape shares one wall-clock budget (`TIMEOUT`, 10–300s) rather than each step getting
   its own independent timeout.
 - Site interaction is hardcoded against DEWA's current DOM (fixed selectors like
-  `input[name="Username"]`, `#gauge-component > form + div > div:nth-child(1)`) with an
-  explicit code comment warning these will need updating if DEWA changes its markup — no
-  abstraction or config layer insulates this script from site changes.
+  `input[name="Username"]`) with explicit code comments warning these will need updating
+  if DEWA changes its markup — no abstraction or config layer insulates either script
+  from site changes.
+- Unlike `scraper.js`, the outer IIFE in each re-throws from `scrapeDEWA()` and the
+  *outer* catch is what does `console.error` + `process.exit(1)` — the diagnostics
+  (screenshot/HTML dump) are captured inside `scrapeDEWA()`'s own catch before the
+  re-throw, so they still happen, just structured as two nested try/catch layers instead
+  of one.
+
+Beyond that shared shape, each script's site-interaction logic is distinct:
+
+### `dewa_incremental.js` (billing-period totals)
+- Selects a billing period from the usage page's `<select>` dropdown. `PERIOD=CURRENT`
+  resolution tries several known option shapes in order (`UnbilledConsumption` value,
+  "till yesterday" label text, then a heuristic on the first option's `mmyyyy` value) —
+  see the requirement doc's period-resolution rules.
 - Period selection polls in a `while (true)` loop, re-reading the `<select>`'s current
   value after each `selectOption` call until it matches the requested `optionValue`,
   bounded only by the shared `getRemaining()` timeout inside `waitForFunction`/
   `selectOption` (there's no explicit iteration cap — a `TIMEOUT` exceeded during this
   loop throws from `getRemaining()` and unwinds into the `catch` block).
-- Final result shape (`{ period, electricity, water }`) is produced by two `page.$eval`
-  calls that split `innerText` on line breaks positionally (`[0]` = value, `[2]` = type
-  label), then a manual check that the type labels are literally `"Electricity"` /
-  `"Water"` before trusting the values — a lightweight sanity check against a layout
-  change silently mis-mapping fields.
-- Unlike `scraper.js`, the outer IIFE here re-throws from `scrapeDEWA()` and the *outer*
-  catch is what does `console.error` + `process.exit(1)` — the diagnostics (screenshot/
-  HTML dump) are captured inside `scrapeDEWA()`'s own catch before the re-throw, so they
-  still happen, just structured as two nested try/catch layers instead of one.
+- Final result shape (`{ period, electricity, water }`) is produced by two locator
+  `evaluate` calls against `#gauge-component > form + div > div:nth-child(1|2)` that
+  split `innerText` on line breaks positionally (`[0]` = value, `[2]` = type label),
+  then a manual check that the type labels are literally `"Electricity"` / `"Water"`
+  before trusting the values — a lightweight sanity check against a layout change
+  silently mis-mapping fields.
+- `period` in the output is derived, not the raw dropdown value: `billingPeriodStart()`
+  maps the selected `mmyyyy` (or, for `UnbilledConsumption`, the *next* dropdown entry's
+  `mmyyyy`) to an ISO date/time on the 22nd of the appropriate month at `+04:00`
+  (Asia/Dubai has no DST), since DEWA billing periods run 22nd-to-21st.
+
+### `dewa_daily.js` (per-day consumption)
+- Iterates every calendar month touched by `[DATE_FROM, DATE_TO]`, and within each month,
+  both utilities (`#dvElectricity` / `#dvWater`).
+- `activateDailyTab()` clicks each panel's "Daily" tab and confirms activation via the
+  tab element's own `active` class (not the month input's visibility, which can lag or
+  mislead — see the code comment on why water in particular needs this), retrying up to
+  `DAILY_TAB_RETRIES` (3) times.
+- `selectMonthInPicker()` drives DEWA's Air Datepicker month-picker widget (year
+  header + prev/next + month-cell clicks, since the widget only exposes year-level
+  navigation in month-picker mode) to land on the target month; skipped for the current
+  in-progress month, whose picker cell DEWA disables.
+- `readMonthlySeries()` then polls the panel's `data-series` DOM attribute (a JSON blob
+  the page embeds per rendered chart) for an entry whose `name` matches the target
+  month's `"Month Year"` label, retrying up to `DATA_SERIES_RETRIES` (9, 2s apart) and
+  re-activating the Daily tab between attempts, since chart re-render lags behind the
+  tab/picker interaction that triggers it.
+- `seriesToDailyRecords()` maps the matched series' per-day array onto actual calendar
+  dates, and results across all months/utilities are merged into one sorted array
+  covering every requested day; a day missing a reading in either series comes back with
+  that field `null` plus a logged warning, rather than failing the whole run.
 
 ## Build & release tooling
 - **`ci/version.sh`** — pure `git describe`/`git status` shell logic (no external version
@@ -181,13 +219,18 @@ Demonstrates the "mount over `/scraper/scraper.js`" extension point described in
   paths).
 
 ## Known implementation quirks worth knowing before changing this code
-- `scraper.js` and `dewa_usage.js` duplicate the logger bootstrap, `requireParentDir`,
-  and `parseTraceConfig` byte-for-byte. Any fix to one (e.g. a bug in trace-config
-  parsing) needs to be applied to both files by hand — there is no shared module.
+- `scraper.js`, `dewa_daily.js`, and `dewa_incremental.js` duplicate the logger
+  bootstrap, `requireParentDir`, and `parseTraceConfig` byte-for-byte across all three
+  files. Any fix to one (e.g. a bug in trace-config parsing) needs to be applied to all
+  three by hand — there is no shared module.
+- `dewa_daily.js` and `dewa_incremental.js` also duplicate their own DEWA-login step
+  (`page.goto` + credential fill + submit) and bot-detection-evasion `addInitScript`
+  byte-for-byte between each other, on top of what they share with `scraper.js`.
 - `entrypoint.sh`'s `NETWORK_TIMEOUT` is an iteration count, not a second count (see
   `docs/requirements/implemented/network-readiness.md`).
-- `scraper.js` uses `process.exitCode = 1` (lets `finally` run first); `dewa_usage.js`
-  uses `process.exit(1)` in its outer catch — the outer catch runs after `scrapeDEWA()`'s
-  own `finally` has already completed context/browser teardown, so this difference is
-  currently safe, but it means the two scripts don't have visually consistent shutdown
-  code despite being copy-derived from a common shape.
+- `scraper.js` uses `process.exitCode = 1` (lets `finally` run first); `dewa_daily.js`
+  and `dewa_incremental.js` use `process.exit(1)` in their outer catch — the outer catch
+  runs after `scrapeDEWA()`'s own `finally` has already completed context/browser
+  teardown, so this difference is currently safe, but it means the specialized scripts
+  don't have visually consistent shutdown code with `scraper.js` despite being
+  copy-derived from a common shape.

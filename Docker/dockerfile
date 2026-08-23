@@ -6,7 +6,7 @@ COPY ./scraper.js /scraper/
 
 WORKDIR /scraper
 
-COPY ./entrypoint.sh /entrypoint.sh
+COPY --chmod=755 ./entrypoint.sh /entrypoint.sh
 ENTRYPOINT [ "/entrypoint.sh" ]
 CMD [ "node", "scraper.js" ]
 

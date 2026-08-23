@@ -1,4 +1,4 @@
-IMAGE_TAG=v1.61.0-noble
+IMAGE_TAG=v1.62.1-noble
 podman build -t mini-scraper:$IMAGE_TAG-arm64 --platform linux/arm64  --build-arg "IMAGE_TAG=$IMAGE_TAG" -f Docker/dockerfile Docker/Files/
 podman build -t mini-scraper:$IMAGE_TAG-amd64 --platform linux/amd64  --build-arg "IMAGE_TAG=$IMAGE_TAG" -f Docker/dockerfile Docker/Files/
 podman manifest rm -i mini-scraper:$IMAGE_TAG

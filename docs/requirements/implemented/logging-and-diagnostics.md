@@ -4,27 +4,29 @@
 Approved — pending implementation.
 
 ## Scope
-Applies identically to both `Docker/Files/scraper.js` (default container script) and
-`specialized/dewa_usage.js` (specialized script) unless a section says otherwise.
+Applies identically to `Docker/Files/scraper.js` (default container script),
+`specialized/dewa_daily.js`, and `specialized/dewa_incremental.js` (specialized scripts)
+unless a section says otherwise.
 
 ## 1. Logging infrastructure (rotation removed)
 - Remove `winston-daily-rotate-file` (dependency, usage, and the Dockerfile `npm install`
   entry).
-- Both scripts log via winston to a single fixed file, `/logs/miniscraper.log`, in addition
+- All scripts log via winston to a single fixed file, `/logs/miniscraper.log`, in addition
   to console output. Log rotation/retention is handled externally to the container (e.g.
   host-level logrotate on the mounted `/logs` volume) — the scripts themselves never
   rotate, rename, or delete this file.
 - Existing `CONSOLE_LOG` / `FILE_LOG` env vars are kept (level name, or `'none'` to
   disable) and are added to `scraper.js`, which does not use winston today.
-  - Both scripts default to `CONSOLE_LOG=none`, `FILE_LOG=warn` — the script keeps
+  - All scripts default to `CONSOLE_LOG=none`, `FILE_LOG=warn` — the script keeps
     working with no `/logs` volume mounted (file logging degrades to a console warning
     in that case, per the rule below), matching the project's zero-config behavior.
 - If file logging is enabled (`FILE_LOG` not `none`) but `/logs` does not exist, the
   script logs a console warning and continues without file logging rather than failing.
 - `CLEANUP_DAYS` and the associated `removeOldFiles()` / `cleanupOldScreenshotsAndPages()`
-  logic are deleted from `dewa_usage.js`.
+  logic are deleted from the specialized script (originally `dewa_usage.js`, since split
+  into `dewa_daily.js` / `dewa_incremental.js`).
 
-## 2. Failure diagnostics: screenshot + page dump (both scripts)
+## 2. Failure diagnostics: screenshot + page dump (all scripts)
 - New env var `FAILURE_DUMP_PREFIX`.
 - If unset: fixed paths `/logs/screenshot.png` and `/logs/page.html` are used.
 - If set: `prefix = value.startsWith('/') ? value : '/logs/' + value`, then the two
@@ -34,9 +36,9 @@ Applies identically to both `Docker/Files/scraper.js` (default container script)
 - Files are overwritten on every failing run; no timestamping, no retention logic.
 - `scraper.js` currently has no failure handling around its main flow — it gains a
   try/catch so it can take a screenshot and save the page HTML on failure before
-  exiting non-zero, mirroring `dewa_usage.js`'s existing behavior.
+  exiting non-zero, mirroring the specialized scripts' existing behavior.
 
-## 3. Network HAR capture (both scripts)
+## 3. Network HAR capture (all scripts)
 - New env var `NETWORK_HAR_PATH` — full file path (e.g. `/logs/network.har`).
 - If set, passed as `recordHar: { path }` to `browser.newContext()`. Unset = disabled
   (default, current behavior).
@@ -44,7 +46,7 @@ Applies identically to both `Docker/Files/scraper.js` (default container script)
 - Playwright's `recordHar` `mode`/`content` sub-options are out of scope; Playwright
   defaults are used.
 
-## 4. Tracing capture (both scripts)
+## 4. Tracing capture (all scripts)
 - New env var `TRACE_CONFIG` — single value: the trace zip path as the first
   whitespace-separated token, followed by optional `flag:true|false` tokens for
   `screenshots`, `snapshots`, `sources`.
@@ -55,11 +57,11 @@ Applies identically to both `Docker/Files/scraper.js` (default container script)
   immediately after context creation, and `context.tracing.stop({ path })` guaranteed
   via `finally` so the trace is captured even when the run fails.
 
-## 5. Playwright internal debug scopes (both scripts)
+## 5. Playwright internal debug scopes (all scripts)
 - New env var `PW_DEBUG_SCOPES` — comma-separated Playwright debug namespaces (e.g.
   `pw:api,pw:browser`).
-- If set, assigned to `process.env.DEBUG` before `require('playwright')` runs — both
-  scripts need their top lines reordered so this assignment happens first, since the
+- If set, assigned to `process.env.DEBUG` before `require('playwright')` runs — each
+  script needs its top lines reordered so this assignment happens first, since the
   underlying `debug` package resolves enabled namespaces from `process.env.DEBUG` at
   first use.
 - Output goes to stderr (Playwright/`debug`'s own default). No dedicated log file for

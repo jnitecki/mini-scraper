@@ -51,7 +51,7 @@ if (fileLevel !== 'none') {
       filename: LOG_FILE_PATH,
       level: fileLevel,
       format: format.combine(
-        format.timestamp({ format: 'YYYY-MM-dd HH:mm:ss' }),
+        format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
         format.printf(({ timestamp, level, message }) => {
           let output;
           if (typeof message === 'string') {
