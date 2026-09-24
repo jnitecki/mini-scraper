@@ -183,7 +183,12 @@ Beyond that shared shape, each script's site-interaction logic is distinct:
 - `selectMonthInPicker()` drives DEWA's Air Datepicker month-picker widget (year
   header + prev/next + month-cell clicks, since the widget only exposes year-level
   navigation in month-picker mode) to land on the target month; skipped for the current
-  in-progress month, whose picker cell DEWA disables.
+  in-progress month, whose picker cell DEWA disables. Before opening the picker,
+  `waitForDailySeries()` waits (bounded, non-fatal, up to 10s) for the panel's
+  `data-series` to switch to daily data, so the picker isn't opened while the Daily tab's
+  own chart reload is in flight. Every click inside the picker uses a bounded 5s wait
+  (`PICKER_ACTION_WAIT_MS`), and if the picker closes mid-sequence the whole
+  open/navigate/click sequence is retried up to `PICKER_SELECT_RETRIES` (2) times.
 - `readMonthlySeries()` then polls the panel's `data-series` DOM attribute (a JSON blob
   the page embeds per rendered chart) for an entry whose `name` matches the target
   month's `"Month Year"` label, retrying up to `DATA_SERIES_RETRIES` (9, 2s apart) and

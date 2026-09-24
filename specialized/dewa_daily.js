@@ -91,6 +91,25 @@ if (!USERNAME || !PASSWORD) {
   process.exit(1);
 }
 
+function parseBooleanFlag(envVarName) {
+  const raw = process.env[envVarName];
+  if (raw === undefined) return false;
+  if (raw !== 'true' && raw !== 'false') {
+    logger.error(`Error: ${envVarName} must be 'true' or 'false'`);
+    logger.error(`Usage: ${envVarName}=true node dewa_daily.js`);
+    process.exit(1);
+  }
+  return raw === 'true';
+}
+
+// DEWA's Daily chart, when navigated to a month before the utility's own data history
+// begins, snaps to the earliest month it actually has data for instead of the requested
+// one - so the requested month simply has no data. These flags let the caller opt in to
+// treating that as "no data for this period" rather than a hard error, separately per
+// utility since electricity and water history start on different dates.
+const ALLOW_MISSING_PRE_HISTORY_ELECTRICITY = parseBooleanFlag('ALLOW_MISSING_PRE_HISTORY_ELECTRICITY');
+const ALLOW_MISSING_PRE_HISTORY_WATER = parseBooleanFlag('ALLOW_MISSING_PRE_HISTORY_WATER');
+
 // Validate DATE_FROM / DATE_TO and resolve open ranges.
 // Floor date is temporary: intended target is 2020-02-01, using 2019-01-01 for now.
 const MIN_DATE_FROM = '2019-01-01';
@@ -217,8 +236,8 @@ const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December'];
 
 const UTILITIES = [
-  { key: 'electricity', containerSelector: '#dvElectricity', inputSelector: '#dp_month_e1' },
-  { key: 'water', containerSelector: '#dvWater', inputSelector: '#dp_month_w1' },
+  { key: 'electricity', containerSelector: '#dvElectricity', inputSelector: '#dp_month_e1', allowMissingPreHistory: ALLOW_MISSING_PRE_HISTORY_ELECTRICITY },
+  { key: 'water', containerSelector: '#dvWater', inputSelector: '#dp_month_w1', allowMissingPreHistory: ALLOW_MISSING_PRE_HISTORY_WATER },
 ];
 
 // DEWA uses Air Datepicker (https://air-datepicker.com/) for the month input. Every
@@ -246,6 +265,45 @@ const DAILY_TAB_ACTIVATION_WAIT_MS = 15000;
 const DATA_SERIES_RETRIES = 9;
 const DATA_SERIES_RETRY_DELAY_MS = 2000;
 
+// After opening the month picker or clicking prev/next, Air Datepicker briefly re-renders
+// its own nav/cells DOM. Interacting again immediately (as Playwright does, unlike a human)
+// can land mid-re-render and detach the element Playwright already resolved. Beyond that
+// render race, DEWA also runs Akamai Bot Manager, which does its own behavioral scoring on
+// click timing - a burst of clicks spaced by an exact, fixed interval reads as clearly
+// non-human and can get the picker throttled into never showing as active again, independent
+// of any render-race timing. A larger, randomized (not fixed) delay between picker
+// interactions addresses both at once.
+const PICKER_SETTLE_DELAY_MIN_MS = 800;
+const PICKER_SETTLE_DELAY_MAX_MS = 1600;
+
+async function pickerSettle(page) {
+  const delay = PICKER_SETTLE_DELAY_MIN_MS + Math.random() * (PICKER_SETTLE_DELAY_MAX_MS - PICKER_SETTLE_DELAY_MIN_MS);
+  await page.waitForTimeout(delay);
+}
+
+// Same flakiness class as DAILY_TAB_RETRIES/activateDailyTab() below, just for the click that
+// opens the month picker itself: it sometimes just doesn't register, independent of how long
+// we wait afterward. A single click backed by one long wait can burn tens of seconds doing
+// nothing when that happens; retrying the click with a bounded per-attempt wait recovers in
+// practice, the same way it does for the Daily tab click.
+const PICKER_OPEN_RETRIES = 3;
+const PICKER_OPEN_WAIT_MS = 5000;
+
+// Even once open, the picker can close on its own before we've clicked through to the target
+// month - observed as the month-cell click waiting on `.datepicker.active` until the whole
+// run budget ran out, with every picker instance inactive in the failure dump. Each click
+// inside the picker therefore gets a bounded wait, and if the picker has gone away the whole
+// open/navigate/click sequence is retried from scratch.
+const PICKER_SELECT_RETRIES = 2;
+const PICKER_ACTION_WAIT_MS = 5000;
+
+// Clicking the Daily tab kicks off an async reload of the chart for the default (current)
+// month. Opening the picker while that is still in flight is the likely trigger for it being
+// closed again underneath us, so before touching the picker we wait (bounded) for the panel's
+// data-series to switch to daily data, i.e. to be named by a "Month Year" label.
+const DAILY_SERIES_READY_WAIT_MS = 10000;
+const DAILY_SERIES_READY_POLL_MS = 500;
+
 function monthsInRange(fromISO, toISO) {
   const [fromYear, fromMonth] = fromISO.split('-').map(Number);
   const [toYear, toMonth] = toISO.split('-').map(Number);
@@ -266,6 +324,18 @@ function daysInMonth(year, month) {
 
 function formatMonthLabel(year, month) {
   return `${MONTH_NAMES[month - 1]} ${year}`;
+}
+
+function parseMonthLabel(label) {
+  const match = /^([A-Za-z]+) (\d{4})$/.exec(label.trim());
+  if (!match) return null;
+  const monthIndex = MONTH_NAMES.indexOf(match[1]);
+  if (monthIndex === -1) return null;
+  return { year: Number(match[2]), month: monthIndex + 1 };
+}
+
+function isLaterMonth(candidate, year, month) {
+  return candidate.year > year || (candidate.year === year && candidate.month > month);
 }
 
 function isoDate(year, month, day) {
@@ -294,6 +364,17 @@ function parseDataSeries(rawAttr, containerSelector) {
     throw new Error(`Error: Unexpected data-series format on ${containerSelector}`);
   }
   return series;
+}
+
+function datesInMonthRange(year, month, fromISO, toISO) {
+  const dates = [];
+  const lastDay = daysInMonth(year, month);
+  for (let day = 1; day <= lastDay; day++) {
+    const date = isoDate(year, month, day);
+    if (date < fromISO || date > toISO) continue;
+    dates.push(date);
+  }
+  return dates;
 }
 
 function seriesToDailyRecords(data, year, month, fromISO, toISO) {
@@ -352,13 +433,47 @@ async function activateDailyTab(page, containerSelector, inputSelector, getRemai
   throw new Error(`Error: Daily tab on ${containerSelector} never activated after ${DAILY_TAB_RETRIES} retries`);
 }
 
-async function selectMonthInPicker(page, inputSelector, targetYear, targetMonth, getRemaining) {
+async function openMonthPicker(page, inputSelector, getRemaining) {
+  const yearHeader = page.locator(MONTH_PICKER.yearHeaderSelector);
   // Same duplicated-instance quirk as activateDailyTab() - narrow to the visible copy.
-  await page.locator(`${inputSelector}:visible`).click({ timeout: getRemaining() });
+  const monthInput = page.locator(`${inputSelector}:visible`);
 
+  for (let attempt = 0; attempt <= PICKER_OPEN_RETRIES; attempt++) {
+    await monthInput.click({ timeout: getRemaining() });
+    try {
+      await yearHeader.waitFor({ state: 'visible', timeout: Math.min(getRemaining(), PICKER_OPEN_WAIT_MS) });
+      await pickerSettle(page);
+      return;
+    } catch (waitErr) {
+      // Picker never opened; fall through to retry the click.
+    }
+    logger.warn(`${inputSelector}: month picker did not open after click, attempt ${attempt + 1}/${PICKER_OPEN_RETRIES + 1}`);
+  }
+
+  throw new Error(`Error: month picker for ${inputSelector} never opened after ${PICKER_OPEN_RETRIES} retries`);
+}
+
+async function selectMonthInPicker(page, inputSelector, targetYear, targetMonth, getRemaining) {
+  for (let attempt = 0; attempt <= PICKER_SELECT_RETRIES; attempt++) {
+    try {
+      await navigatePickerToMonth(page, inputSelector, targetYear, targetMonth, getRemaining);
+      return;
+    } catch (err) {
+      // Only a picker that vanished mid-sequence (bounded wait timing out) is worth retrying;
+      // anything else (unreadable header, unreachable year, ...) is a real failure.
+      if (err.name !== 'TimeoutError' || attempt === PICKER_SELECT_RETRIES) throw err;
+      logger.warn(`${inputSelector}: month picker closed before selecting ${formatMonthLabel(targetYear, targetMonth)}, attempt ${attempt + 1}/${PICKER_SELECT_RETRIES + 1}`);
+    }
+  }
+}
+
+async function navigatePickerToMonth(page, inputSelector, targetYear, targetMonth, getRemaining) {
+  await openMonthPicker(page, inputSelector, getRemaining);
+
+  const actionTimeout = () => Math.min(getRemaining(), PICKER_ACTION_WAIT_MS);
   const yearHeader = page.locator(MONTH_PICKER.yearHeaderSelector);
   const readYear = async () => {
-    const text = await yearHeader.innerText({ timeout: getRemaining() });
+    const text = await yearHeader.innerText({ timeout: actionTimeout() });
     const year = Number(text.trim());
     if (!Number.isInteger(year)) {
       throw new Error(`Error: Unable to read month picker year header '${text}'`);
@@ -371,7 +486,8 @@ async function selectMonthInPicker(page, inputSelector, targetYear, targetMonth,
   const maxSteps = 60; // 60 years of prev/next clicks, generous upper bound
   while (currentYear !== targetYear && guard < maxSteps) {
     const selector = currentYear < targetYear ? MONTH_PICKER.nextYearSelector : MONTH_PICKER.prevYearSelector;
-    await page.locator(selector).click({ timeout: getRemaining() });
+    await page.locator(selector).click({ timeout: actionTimeout() });
+    await pickerSettle(page);
     currentYear = await readYear();
     guard += 1;
   }
@@ -379,12 +495,30 @@ async function selectMonthInPicker(page, inputSelector, targetYear, targetMonth,
     throw new Error(`Error: Unable to navigate month picker to year ${targetYear}`);
   }
 
+  await pickerSettle(page);
   const monthIndex = targetMonth - 1; // Air Datepicker months are 0-indexed
-  await page.locator(MONTH_PICKER.monthCellSelector(monthIndex)).click({ timeout: getRemaining() });
+  await page.locator(MONTH_PICKER.monthCellSelector(monthIndex)).click({ timeout: actionTimeout() });
 }
 
+// Bounded, non-fatal: if the daily data never shows up here, the data-series retries in
+// readMonthlySeries() still decide the outcome - this only avoids opening the picker while
+// the Daily tab's own chart reload is still in flight.
+async function waitForDailySeries(page, containerSelector, getRemaining) {
+  const deadline = Date.now() + Math.min(getRemaining(), DAILY_SERIES_READY_WAIT_MS);
+  while (Date.now() < deadline) {
+    const raw = await page.locator(containerSelector).getAttribute('data-series', { timeout: getRemaining() });
+    const series = parseDataSeries(raw, containerSelector);
+    if (series.some(s => typeof s.name === 'string' && parseMonthLabel(s.name))) return;
+    await page.waitForTimeout(DAILY_SERIES_READY_POLL_MS);
+  }
+  logger.warn(`${containerSelector}: Daily data-series not loaded after ${DAILY_SERIES_READY_WAIT_MS}ms, opening month picker anyway`);
+}
+
+// Returns the requested month's per-day data array, or null if the requested month is
+// before this utility's data history begins and allowMissingPreHistory is set for it (see
+// the before-data-start check below).
 async function readMonthlySeries(page, utility, year, month, getRemaining) {
-  const { containerSelector, inputSelector } = utility;
+  const { containerSelector, inputSelector, allowMissingPreHistory } = utility;
   const expectedLabel = formatMonthLabel(year, month);
 
   await activateDailyTab(page, containerSelector, inputSelector, getRemaining);
@@ -394,6 +528,7 @@ async function readMonthlySeries(page, utility, year, month, getRemaining) {
   // already shows the current month by default just because we can't click it into
   // place; the data-series check below (with retries) is what actually confirms it.
   if (!targetIsCurrentMonth) {
+    await waitForDailySeries(page, containerSelector, getRemaining);
     await selectMonthInPicker(page, inputSelector, year, month, getRemaining);
   }
 
@@ -402,6 +537,23 @@ async function readMonthlySeries(page, utility, year, month, getRemaining) {
     const series = parseDataSeries(raw, containerSelector);
     const match = series.find(s => s.name === expectedLabel);
     if (match) return match.data;
+
+    // When the requested month is before this utility's data history begins, DEWA
+    // doesn't error - it silently clamps the Daily view to the earliest month it does
+    // have data for, which never resolves into a match no matter how long we retry. Its
+    // picker cell being disabled also means our click may never register any change at
+    // all (the panel can already be sitting on that earliest month before we even try),
+    // so unlike an ordinary render-latency mismatch, we don't wait for a change - we
+    // detect this case directly: the mismatched series it's showing is for a *later*
+    // period than requested, i.e. further ahead than the requested month rather than
+    // still catching up to it.
+    if (allowMissingPreHistory) {
+      const snappedForward = series.some((s) => {
+        const parsed = parseMonthLabel(s.name);
+        return parsed && isLaterMonth(parsed, year, month);
+      });
+      if (snappedForward) return null;
+    }
 
     logger.warn(`${containerSelector}: data-series name mismatch (expected '${expectedLabel}', got ${JSON.stringify(series.map(s => s.name))}), attempt ${attempt + 1}/${DATA_SERIES_RETRIES + 1}`);
     if (attempt === DATA_SERIES_RETRIES) {
@@ -428,7 +580,16 @@ async function scrapeDEWA() {
 
   const browser = await chromium.launch({
     headless: true, // Set to false to watch the browser in action (useful for debugging)
-    args: ["--disable-blink-features=AutomationControlled"],
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      // Headless Chromium throttles rAF/timers on pages it treats as backgrounded/occluded.
+      // The month picker's open transition depends on one of those to add its `active`
+      // class, so without these flags it can silently never finish - reproduced by it only
+      // working while Playwright tracing's per-action screenshots forced regular paints.
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+    ],
   });
 
   const contextOptions = {
@@ -492,9 +653,34 @@ async function scrapeDEWA() {
       perDate.set(date, { date, electricity: null, water: null });
     }
 
-    for (const { year, month } of monthsInRange(resolvedDateFrom, resolvedDateTo)) {
+    // Dates intentionally left null because the requested month is before that utility's
+    // data history began and allowMissingPreHistory is set for it - excluded from the
+    // missing-reading warnings below since this is expected, not an unexpected gap.
+    const ignoredDates = { electricity: new Set(), water: new Set() };
+
+    // The current month's Daily view only shows its data by default when nothing else has
+    // been explicitly selected yet - its picker cell is disabled, so once some other month
+    // has been picked (which happens for any earlier month in a normal chronological pass),
+    // the chart just keeps showing that selection forever instead of ever moving back to the
+    // current month. Processing the current month first (per utility, before any other
+    // month's explicit selection can overwrite that default) is what lets readMonthlySeries'
+    // no-selection path for it actually work.
+    const orderedMonths = monthsInRange(resolvedDateFrom, resolvedDateTo);
+    const currentMonthIndex = orderedMonths.findIndex(({ year, month }) => isCurrentDubaiMonth(year, month));
+    if (currentMonthIndex > 0) {
+      const [currentMonthEntry] = orderedMonths.splice(currentMonthIndex, 1);
+      orderedMonths.unshift(currentMonthEntry);
+    }
+
+    for (const { year, month } of orderedMonths) {
       for (const utility of UTILITIES) {
         const data = await readMonthlySeries(page, utility, year, month, getRemaining);
+        if (data === null) {
+          for (const date of datesInMonthRange(year, month, resolvedDateFrom, resolvedDateTo)) {
+            ignoredDates[utility.key].add(date);
+          }
+          continue;
+        }
         const monthRecords = seriesToDailyRecords(data, year, month, resolvedDateFrom, resolvedDateTo);
         for (const [date, value] of monthRecords) {
           const entry = perDate.get(date);
@@ -505,7 +691,9 @@ async function scrapeDEWA() {
 
     const results = Array.from(perDate.values());
     for (const entry of results) {
-      if (entry.electricity === null || entry.water === null) {
+      const missingElectricity = entry.electricity === null && !ignoredDates.electricity.has(entry.date);
+      const missingWater = entry.water === null && !ignoredDates.water.has(entry.date);
+      if (missingElectricity || missingWater) {
         logger.warn(`Missing reading for ${entry.date}: electricity=${entry.electricity}, water=${entry.water}`);
       }
     }
